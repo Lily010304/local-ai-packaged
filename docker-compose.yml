@@ -14,6 +14,7 @@ volumes:
   langfuse_clickhouse_data:
   langfuse_clickhouse_logs:
   langfuse_minio_data:
+  whisper_cache:
 
 x-n8n: &service-n8n
   image: n8nio/n8n:latest
@@ -54,6 +55,66 @@ x-init-ollama: &init-ollama
     - "sleep 3; OLLAMA_HOST=ollama:11434 ollama pull qwen2.5:7b-instruct-q4_K_M; OLLAMA_HOST=ollama:11434 ollama pull nomic-embed-text"
 
 services:
+  insightslm:
+      build:
+        context: ./insights-lm-local-package
+        dockerfile: Dockerfile
+        args:
+          VITE_SUPABASE_URL: ${API_EXTERNAL_URL}
+          VITE_SUPABASE_ANON_KEY: ${ANON_KEY}
+      container_name: insightslm
+      ports:
+        - 3010:80
+      restart: unless-stopped
+
+  coqui-tts:
+    image: ghcr.io/coqui-ai/tts
+    container_name: coqui-tts
+    restart: unless-stopped
+    ports:
+      - 5002
+    entrypoint: ["python3", "TTS/server/server.py"]
+    command: ["--model_name", "tts_models/en/vctk/vits", "--use_cuda", "${COQUI_USE_CUDA:-false}"]
+
+  # CPU-friendly Whisper (no GPU runtime required)
+  whisper-asr-cpu:
+    image: onerahmet/openai-whisper-asr-webservice:latest
+    container_name: whisper-asr
+    restart: unless-stopped
+    ports:
+      - "9002:9000"
+    environment:
+      - ASR_MODEL=${WHISPER_MODEL:-base}
+      - ASR_ENGINE=${WHISPER_ENGINE:-openai_whisper}
+      - ASR_MODEL_PATH=/data/whisper
+    volumes:
+      - whisper_cache:/data/whisper
+    profiles: ["cpu"]
+
+  # GPU Whisper for NVIDIA profile
+  whisper-asr-gpu:
+    image: onerahmet/openai-whisper-asr-webservice:latest-gpu
+    container_name: whisper-asr
+    restart: unless-stopped
+    ports:
+      - "9002:9000"
+    environment:
+      - ASR_MODEL=${WHISPER_MODEL:-base}
+      - ASR_ENGINE=${WHISPER_ENGINE:-openai_whisper}
+      - ASR_MODEL_PATH=/data/whisper
+    volumes:
+      - whisper_cache:/data/whisper
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    profiles: ["gpu-nvidia"]
+
+
+
   flowise:
     image: flowiseai/flowise
     restart: unless-stopped
@@ -289,7 +350,7 @@ services:
       start_period: 1s
 
   postgres:
-    image: postgres:${POSTGRES_VERSION:-17}
+    image: postgres:${POSTGRES_VERSION:-latest}
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]

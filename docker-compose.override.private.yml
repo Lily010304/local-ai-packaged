@@ -8,6 +8,11 @@ services:
       - 127.0.0.1:8080:8080
 
   n8n:
+    # Persist n8n data to a host folder so workflows/credentials survive restarts
+    volumes: !reset
+      - ./data/n8n:/home/node/.n8n
+      - ./n8n/backup:/backup
+      - ./shared:/data/shared
     ports:
       - 127.0.0.1:5678:5678
 

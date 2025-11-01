@@ -20,8 +20,15 @@ def run_command(cmd, cwd=None):
     print("Running:", " ".join(cmd))
     subprocess.run(cmd, cwd=cwd, check=True)
 
+def run_command_capture(cmd, cwd=None):
+    """Run a shell command and return (returncode, stdout, stderr)."""
+    print("Running:", " ".join(cmd))
+    proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+    return proc.returncode, proc.stdout, proc.stderr
+
 def clone_supabase_repo():
     """Clone the Supabase repository using sparse checkout if not already present."""
+
     if not os.path.exists("supabase"):
         print("Cloning the Supabase repository...")
         run_command([
@@ -54,18 +61,70 @@ def stop_existing_containers(profile=None):
     cmd.extend(["-f", "docker-compose.yml", "down"])
     run_command(cmd)
 
+def wait_for_container_healthy(container_name: str, timeout_sec: int = 180) -> bool:
+    """Poll docker inspect until the container has Health.Status == healthy or timeout."""
+    deadline = time.time() + timeout_sec
+    while time.time() < deadline:
+        rc, out, _ = run_command_capture([
+            "docker", "inspect", "--format", "{{.State.Health.Status}}", container_name
+        ])
+        if rc == 0:
+            status = out.strip()
+            if status == "healthy":
+                print(f"{container_name} is healthy")
+                return True
+        time.sleep(2)
+    print(f"Timed out waiting for {container_name} to become healthy")
+    return False
+
 def start_supabase(environment=None):
-    """Start the Supabase services (using its compose file)."""
-    print("Starting Supabase services...")
-    cmd = ["docker", "compose", "-p", "localai", "-f", "supabase/docker/docker-compose.yml"]
+    """Start Supabase in two phases: vector+db first, then remaining services."""
+    print("Starting Supabase core (vector, db)...")
+    base = [
+        "docker", "compose", "-p", "localai", "-f", "supabase/docker/docker-compose.yml",
+        "--env-file", ".env"
+    ]
     if environment and environment == "public":
-        cmd.extend(["-f", "docker-compose.override.public.supabase.yml"])
-    cmd.extend(["up", "-d"])
-    run_command(cmd)
+        base = base[:5] + ["-f", "docker-compose.override.public.supabase.yml"] + base[5:]
+
+    # Phase 1: vector + db
+    run_command(base + ["up", "-d", "vector", "db"])
+
+    # Wait for DB health
+    if not wait_for_container_healthy("supabase-db", timeout_sec=300):
+        print("supabase-db failed to become healthy. Recent logs:")
+        subprocess.run(["docker", "logs", "--tail", "200", "supabase-db"])  # best-effort
+        raise RuntimeError("Supabase DB did not become healthy in time")
+
+    # Phase 2: remaining services (don't hard-fail on early restarts)
+    print("Starting remaining Supabase services...")
+    remaining = [
+        "up", "-d",
+        "analytics", "auth", "rest", "realtime", "storage", "imgproxy",
+        "meta", "functions", "kong", "supavisor", "studio"
+    ]
+    rc, out, err = run_command_capture(base + remaining)
+    if rc != 0:
+        print("Warning: Some Supabase services may still be initializing. Compose returned non-zero.")
+        if err:
+            print(err)
+    print("Supabase service status:")
+    subprocess.run(["docker", "compose", "-p", "localai", "-f", "supabase/docker/docker-compose.yml", "ps"])  # best-effort
+# (wait_for_container_healthy defined above)
 
 def start_local_ai(profile=None, environment=None):
     """Start the local AI services (using its compose file)."""
     print("Starting local AI services...")
+    # Clean up known conflicting orphan container names from older runs
+    try:
+        rc, out, _ = run_command_capture(["docker", "ps", "-aq", "-f", "name=^/whisper-asr$"])
+        if rc == 0:
+            cid = out.strip()
+            if cid:
+                print("Removing orphan container 'whisper-asr' to avoid name conflicts...")
+                subprocess.run(["docker", "rm", "-f", "whisper-asr"], check=False)
+    except Exception as e:
+        print(f"Warning: could not pre-clean whisper-asr container: {e}")
     cmd = ["docker", "compose", "-p", "localai"]
     if profile and profile != "none":
         cmd.extend(["--profile", profile])
@@ -74,8 +133,21 @@ def start_local_ai(profile=None, environment=None):
         cmd.extend(["-f", "docker-compose.override.private.yml"])
     if environment and environment == "public":
         cmd.extend(["-f", "docker-compose.override.public.yml"])
-    cmd.extend(["up", "-d"])
-    run_command(cmd)
+    cmd.extend(["up", "-d", "--remove-orphans"])
+    rc, out, err = run_command_capture(cmd)
+    if rc != 0:
+        print("Warning: Some local AI services may still be initializing or have errors. Compose returned non-zero.")
+        if err:
+            print(err)
+    print("Local AI service status:")
+    # Show status of local AI services defined in this compose
+    ps_cmd = ["docker", "compose", "-p", "localai", "-f", "docker-compose.yml"]
+    if environment and environment == "private":
+        ps_cmd.extend(["-f", "docker-compose.override.private.yml"])
+    if environment and environment == "public":
+        ps_cmd.extend(["-f", "docker-compose.override.public.yml"])
+    ps_cmd.append("ps")
+    subprocess.run(ps_cmd)
 
 def generate_searxng_secret_key():
     """Generate a secret key for SearXNG based on the current platform."""
