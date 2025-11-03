@@ -272,7 +272,7 @@
     },
     {
       "parameters": {
-        "model": "qwen3:8b-q4_K_M",
+        "model": "qwen2.5:3b-instruct-q4_K_M",
         "options": {
           "format": "json"
         }
