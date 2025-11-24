@@ -1,4 +1,10 @@
 services:
+  functions:
+    environment:
+      - ADDITIONAL_SOURCES_WEBHOOK_URL=http://host.docker.internal:5678/webhook/670882ea-5c1e-4b50-9f41-4792256af985
+      - DOCUMENT_PROCESSING_WEBHOOK_URL=http://host.docker.internal:5678/webhook/19566c6c-e0a5-4a8f-ba1a-5203c2b663b7
+      - NOTEBOOK_GENERATION_AUTH=${NOTEBOOK_GENERATION_AUTH}
+
   flowise:
     ports:
       - 127.0.0.1:3001:3001

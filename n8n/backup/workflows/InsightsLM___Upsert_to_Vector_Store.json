@@ -138,7 +138,7 @@
         "nodeCredentialType": "supabaseApi",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\n  \"source_id\": \"{{ $('Code').item.json.source_id }}\",\n  \"status\": \"completed\"\n}\n",
+        "jsonBody": "={{ { source_id: $('Code').item.json.source_id, status: 'completed' } }}",
         "options": {
           "redirect": {
             "redirect": {}
@@ -234,6 +234,9 @@
       ],
       "id": "69901bf9-75b5-4f3d-aab3-69aaa9ea7c15",
       "name": "Supabase",
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 5000,
       "credentials": {
         "supabaseApi": {
           "id": "FLQTzRBk2pJi894u",
@@ -324,7 +327,7 @@
     },
     {
       "parameters": {
-        "model": "qwen3:8b-q4_K_M",
+        "model": "qwen2.5:3b-instruct-q4_K_M",
         "options": {
           "format": "json"
         }
